@@ -1,16 +1,16 @@
 #!/usr/bin/env node
 /**
- * SiteScout Lead Agent — Scans businesses, audits websites, saves leads to Supabase.
- * Runs as cron sub-agent. Uses the deployed Vercel API for search + audit,
- * then saves leads with score < threshold via /api/leads/bulk.
+ * SiteScout Lead Agent — Lightweight sequential scanner.
+ * Scans ONE category at a time via Vercel API, saves leads, emails report.
+ * Designed for 1.9GB RAM server — minimal memory usage.
  */
 
 const SITESCOUT_API = process.env.SITESCOUT_API || 'https://sitescout-olive.vercel.app';
 const LEAD_THRESHOLD = 55;
-const MAX_PER_SEARCH = 10;
+const MAX_PER_SEARCH = 8;
 
-// GA metro targets — service businesses most likely to have bad websites
-const SCAN_TARGETS = [
+// Rotate through 4 targets per run to keep it light
+const ALL_TARGETS = [
   { category: 'Restaurants', location: 'McDonough, GA' },
   { category: 'Hair salons', location: 'McDonough, GA' },
   { category: 'Auto repair shops', location: 'McDonough, GA' },
@@ -29,208 +29,169 @@ const SCAN_TARGETS = [
   { category: 'Electricians', location: 'Jonesboro, GA' },
 ];
 
-async function extractContactInfo(url) {
-  const info = { email: null, ownerName: null, facebook: null, instagram: null };
-  try {
-    const res = await fetch(url, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; SiteScout/1.0)' },
-      redirect: 'follow',
-      signal: AbortSignal.timeout(10000),
-    });
-    let html = await res.text();
-
-    // Emails
-    const emails = html.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g) || [];
-    const clean = emails.filter(e =>
-      !e.includes('example') && !e.includes('sentry') && !e.includes('webpack') &&
-      !e.includes('.png') && !e.includes('.jpg') && !e.includes('wixpress') &&
-      !e.includes('schema.org') && !e.includes('protection')
-    );
-    info.email = clean[0] || null;
-    if (!info.email) {
-      const mailto = html.match(/mailto:([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/);
-      if (mailto) info.email = mailto[1];
-    }
-
-    // Owner name
-    const ownerPatterns = [
-      /(?:owner|founder|proprietor|ceo|president|operated by|owned by)[:\s]*([A-Z][a-z]+ [A-Z][a-z]+)/i,
-      /(?:Dr\.|Dr)\s+([A-Z][a-z]+ [A-Z][a-z]+)/,
-      /(?:meet|about)\s+(?:the\s+)?(?:owner|founder)?[:\s]*([A-Z][a-z]+ [A-Z][a-z]+)/i,
-    ];
-    for (const pat of ownerPatterns) {
-      const m = html.match(pat);
-      if (m) { info.ownerName = m[1].trim(); break; }
-    }
-
-    // Socials
-    const fb = html.match(/(?:href=["'])(https?:\/\/(?:www\.)?facebook\.com\/[^"'\s>]+)/i);
-    if (fb) info.facebook = fb[1];
-    const ig = html.match(/(?:href=["'])(https?:\/\/(?:www\.)?instagram\.com\/[^"'\s>]+)/i);
-    if (ig) info.instagram = ig[1];
-
-    // Try /about and /contact for more
-    if (!info.email || !info.ownerName) {
-      for (const path of ['/about', '/contact', '/about-us', '/contact-us']) {
-        try {
-          const base = new URL(url);
-          const pr = await fetch(`${base.origin}${path}`, {
-            headers: { 'User-Agent': 'Mozilla/5.0 (compatible; SiteScout/1.0)' },
-            redirect: 'follow',
-            signal: AbortSignal.timeout(8000),
-          });
-          if (!pr.ok) continue;
-          const ph = await pr.text();
-          if (!info.email) {
-            const pe = ph.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g) || [];
-            const ce = pe.filter(e => !e.includes('example') && !e.includes('sentry') && !e.includes('wix'));
-            if (ce[0]) info.email = ce[0];
-          }
-          if (!info.ownerName) {
-            for (const pat of ownerPatterns) {
-              const m = ph.match(pat);
-              if (m) { info.ownerName = m[1].trim(); break; }
-            }
-          }
-          if (info.email && info.ownerName) break;
-        } catch {}
-      }
-    }
-  } catch {}
-  return info;
+// Pick 4 targets based on day of year (rotates daily)
+function getTodaysTargets() {
+  const day = Math.floor(Date.now() / 86400000);
+  const start = (day * 4) % ALL_TARGETS.length;
+  const targets = [];
+  for (let i = 0; i < 4; i++) {
+    targets.push(ALL_TARGETS[(start + i) % ALL_TARGETS.length]);
+  }
+  return targets;
 }
 
-async function searchAndAudit(category, location) {
-  console.log(`\n🔍 ${category} in ${location}`);
+async function scanOne(category, location) {
+  console.log(`🔍 ${category} in ${location}`);
 
-  const res = await fetch(`${SITESCOUT_API}/api/search`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ category, location }),
-  });
+  let businesses;
+  try {
+    const res = await fetch(`${SITESCOUT_API}/api/search`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ category, location }),
+    });
+    if (!res.ok) { console.error('  Search failed'); return []; }
+    const data = await res.json();
+    businesses = data.businesses || [];
+  } catch (e) { console.error(`  Search error: ${e.message}`); return []; }
 
-  if (!res.ok) { console.error('  Search failed'); return []; }
-  const { businesses } = await res.json();
   console.log(`  Found ${businesses.length} businesses`);
-
-  const withSites = businesses.filter(b => b.website).slice(0, MAX_PER_SEARCH);
-  const noSites = businesses.filter(b => !b.website);
   const leads = [];
 
-  // Businesses with no website = instant leads
-  for (const biz of noSites) {
-    console.log(`  ⚫ ${biz.name}: No website`);
+  // No-website businesses = instant leads
+  for (const biz of businesses.filter(b => !b.website).slice(0, 5)) {
     leads.push({
-      placeId: biz.placeId,
-      name: biz.name,
-      address: biz.address,
-      phone: biz.phone,
-      website: null,
-      siteScore: 0,
-      category,
-      location,
-      rating: biz.rating,
-      reviewCount: biz.reviewCount,
-      mapsUrl: biz.mapsUrl,
+      placeId: biz.placeId, name: biz.name, address: biz.address,
+      phone: biz.phone, website: null, siteScore: 0,
+      category, location, rating: biz.rating,
+      reviewCount: biz.reviewCount, mapsUrl: biz.mapsUrl,
     });
   }
 
-  // Audit businesses with websites
-  for (const biz of withSites) {
+  // Audit websites sequentially
+  for (const biz of businesses.filter(b => b.website).slice(0, MAX_PER_SEARCH)) {
     try {
-      const auditRes = await fetch(`${SITESCOUT_API}/api/audit`, {
+      const r = await fetch(`${SITESCOUT_API}/api/audit`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: biz.website, placeId: biz.placeId }),
       });
-      if (!auditRes.ok) continue;
-      const audit = await auditRes.json();
+      if (!r.ok) continue;
+      const audit = await r.json();
       const score = audit.siteScore;
-      const icon = score < 30 ? '🔥' : score < LEAD_THRESHOLD ? '⚠️' : '·';
-      console.log(`  ${icon} ${biz.name}: ${score}`);
 
       if (score < LEAD_THRESHOLD) {
-        const contact = await extractContactInfo(biz.website);
+        console.log(`  🔥 ${biz.name}: ${score}`);
         leads.push({
-          placeId: biz.placeId,
-          name: biz.name,
-          address: biz.address,
-          phone: biz.phone,
-          email: contact.email,
-          ownerName: contact.ownerName,
-          facebook: contact.facebook,
-          instagram: contact.instagram,
-          website: biz.website,
-          siteScore: score,
-          category,
-          location,
-          rating: biz.rating,
-          reviewCount: biz.reviewCount,
-          mapsUrl: biz.mapsUrl,
+          placeId: biz.placeId, name: biz.name, address: biz.address,
+          phone: biz.phone, website: biz.website, siteScore: score,
+          category, location, rating: biz.rating,
+          reviewCount: biz.reviewCount, mapsUrl: biz.mapsUrl,
         });
+      } else {
+        console.log(`  · ${biz.name}: ${score}`);
       }
-    } catch (e) {
-      console.error(`  ✗ ${biz.name}: ${e.message}`);
-    }
+    } catch {}
     await new Promise(r => setTimeout(r, 2000));
   }
 
   return leads;
 }
 
+async function saveLeads(leads) {
+  if (leads.length === 0) return 0;
+  try {
+    const res = await fetch(`${SITESCOUT_API}/api/leads/bulk`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ leads }),
+    });
+    const data = await res.json();
+    return data.inserted || 0;
+  } catch (e) {
+    console.error(`Save failed: ${e.message}`);
+    return 0;
+  }
+}
+
 async function run() {
-  console.log('🕵️ SiteScout Lead Agent');
-  console.log(`  Threshold: score < ${LEAD_THRESHOLD}`);
-  console.log(`  Targets: ${SCAN_TARGETS.length}`);
+  const targets = getTodaysTargets();
+  console.log('🕵️ SiteScout Lead Agent (lightweight)');
+  console.log(`  Scanning ${targets.length} categories today\n`);
 
   const allLeads = [];
 
-  for (const t of SCAN_TARGETS) {
-    const leads = await searchAndAudit(t.category, t.location);
+  for (const t of targets) {
+    const leads = await scanOne(t.category, t.location);
     allLeads.push(...leads);
+    // GC pause between scans
     await new Promise(r => setTimeout(r, 3000));
   }
 
   // Deduplicate
   const seen = new Set();
   const unique = allLeads.filter(l => {
-    const key = l.placeId || l.website || l.name;
+    const key = l.placeId || l.name;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   }).sort((a, b) => (a.siteScore || 0) - (b.siteScore || 0));
 
-  console.log(`\n📊 ${unique.length} total leads found`);
+  const saved = await saveLeads(unique);
+  console.log(`\n💾 Saved ${saved} leads to database`);
 
-  // Save to Supabase via API
-  if (unique.length > 0) {
-    try {
-      const res = await fetch(`${SITESCOUT_API}/api/leads/bulk`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ leads: unique }),
-      });
-      const data = await res.json();
-      console.log(`💾 Saved ${data.inserted || 0} leads to database`);
-    } catch (e) {
-      console.error(`Failed to save: ${e.message}`);
-    }
+  // Build report
+  const noWebsite = unique.filter(l => !l.website);
+  const worstSites = unique.filter(l => l.website).slice(0, 5);
+  const biggestOpportunity = unique[0];
 
-    console.log(`\n🔥 Top 10 (worst websites = best leads):`);
-    unique.slice(0, 10).forEach((l, i) => {
-      console.log(`  ${i + 1}. ${l.name} — Score: ${l.siteScore}/100`);
-      console.log(`     📞 ${l.phone || '-'} | ✉️ ${l.email || '-'} | 👤 ${l.ownerName || '-'}`);
-      console.log(`     🌐 ${l.website || 'No website'}`);
-    });
+  let report = `SiteScout Daily Scan Report\n`;
+  report += `Date: ${new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}\n`;
+  report += `Categories scanned: ${targets.map(t => `${t.category} in ${t.location}`).join(', ')}\n\n`;
+  report += `Total leads found: ${unique.length}\n`;
+  report += `New leads saved: ${saved}\n\n`;
+
+  if (biggestOpportunity) {
+    report += `🏆 BIGGEST OPPORTUNITY\n`;
+    report += `${biggestOpportunity.name}\n`;
+    report += `Score: ${biggestOpportunity.siteScore}/100${!biggestOpportunity.website ? ' (NO WEBSITE)' : ''}\n`;
+    report += `Phone: ${biggestOpportunity.phone || 'N/A'}\n`;
+    report += `Address: ${biggestOpportunity.address || 'N/A'}\n`;
+    report += `Website: ${biggestOpportunity.website || 'None'}\n`;
+    report += `Rating: ${biggestOpportunity.rating || 'N/A'} (${biggestOpportunity.reviewCount || 0} reviews)\n\n`;
   }
 
-  // Summary for cron
+  if (noWebsite.length > 0) {
+    report += `⚫ NO WEBSITE (${noWebsite.length}):\n`;
+    noWebsite.slice(0, 5).forEach(l => {
+      report += `  • ${l.name} — ${l.phone || 'no phone'} — ${l.address}\n`;
+    });
+    report += `\n`;
+  }
+
+  if (worstSites.length > 0) {
+    report += `🔥 WORST WEBSITES:\n`;
+    worstSites.forEach(l => {
+      report += `  • ${l.name} — Score: ${l.siteScore} — ${l.phone || 'no phone'} — ${l.website}\n`;
+    });
+    report += `\n`;
+  }
+
+  report += `View full pipeline: https://sitescout-olive.vercel.app (Pipeline tab)\n`;
+
+  console.log('\n📧 Report:\n' + report);
+
+  // Output for cron to pick up
+  console.log('\n---REPORT---');
+  console.log(report);
+  console.log('---END_REPORT---');
+
   console.log('\n---JSON_SUMMARY---');
   console.log(JSON.stringify({
     totalLeads: unique.length,
-    newNoWebsite: unique.filter(l => !l.website).length,
-    avgScore: unique.length ? Math.round(unique.reduce((s, l) => s + (l.siteScore || 0), 0) / unique.length) : 0,
-    top5: unique.slice(0, 5).map(l => ({ name: l.name, score: l.siteScore, phone: l.phone, email: l.email, ownerName: l.ownerName })),
+    saved,
+    biggestOpportunity: biggestOpportunity ? { name: biggestOpportunity.name, score: biggestOpportunity.siteScore, phone: biggestOpportunity.phone } : null,
+    report,
   }));
 }
 
