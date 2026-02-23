@@ -4,10 +4,5 @@
   "installCommand": "cd server && npm install && cd ../client && npm install",
   "rewrites": [
     { "source": "/api/(.*)", "destination": "/api/index.js" }
-  ],
-  "functions": {
-    "api/index.js": {
-      "includesFiles": "server/**"
-    }
-  }
+  ]
 }
