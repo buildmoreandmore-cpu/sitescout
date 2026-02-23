@@ -7,7 +7,7 @@
 
 const SITESCOUT_API = process.env.SITESCOUT_API || 'https://sitescout-olive.vercel.app';
 const LEAD_THRESHOLD = 55;
-const MAX_PER_SEARCH = 8;
+const MAX_PER_SEARCH = 5;
 
 // Rotate through 4 targets per run to keep it light
 const ALL_TARGETS = [
@@ -92,7 +92,7 @@ async function scanOne(category, location) {
         console.log(`  · ${biz.name}: ${score}`);
       }
     } catch {}
-    await new Promise(r => setTimeout(r, 2000));
+    await new Promise(r => setTimeout(r, 1500));
   }
 
   return leads;
@@ -124,8 +124,7 @@ async function run() {
   for (const t of targets) {
     const leads = await scanOne(t.category, t.location);
     allLeads.push(...leads);
-    // GC pause between scans
-    await new Promise(r => setTimeout(r, 3000));
+    await new Promise(r => setTimeout(r, 2000));
   }
 
   // Deduplicate
