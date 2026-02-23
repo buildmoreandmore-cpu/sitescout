@@ -146,13 +146,23 @@ function TableRow({ business, isExpanded, onToggle, onLeadSaved }) {
   const b = business;
   const saved = isLeadSaved(b.placeId);
 
-  const handleSave = (e) => {
+  const [saving, setSaving] = useState(false);
+  const [justSaved, setJustSaved] = useState(saved);
+
+  const handleSave = async (e) => {
     e.stopPropagation();
-    if (!saved) {
-      saveLead(b);
-      if (onLeadSaved) onLeadSaved();
+    if (!saved && !justSaved && !saving) {
+      setSaving(true);
+      const ok = await saveLead(b);
+      setSaving(false);
+      if (ok) {
+        setJustSaved(true);
+        if (onLeadSaved) onLeadSaved();
+      }
     }
   };
+
+  const isSaved = saved || justSaved;
 
   return (
     <>
@@ -219,13 +229,13 @@ function TableRow({ business, isExpanded, onToggle, onLeadSaved }) {
           <button
             onClick={handleSave}
             className={`p-1.5 rounded-lg transition-colors ${
-              saved
+              isSaved
                 ? 'text-brand-400 cursor-default'
                 : 'text-gray-600 hover:text-brand-400 hover:bg-gray-800'
             }`}
-            title={saved ? 'Saved to pipeline' : 'Save to pipeline'}
+            title={isSaved ? 'Saved to pipeline' : 'Save to pipeline'}
           >
-            <svg className="w-4 h-4" fill={saved ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-4 h-4" fill={isSaved ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
             </svg>
           </button>

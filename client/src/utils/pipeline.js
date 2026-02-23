@@ -1,4 +1,4 @@
-const STORAGE_KEY = 'sitescout_pipeline';
+const API_BASE = '/api';
 
 export const STAGES = [
   { id: 'saved', label: 'Saved', color: 'brand' },
@@ -7,76 +7,76 @@ export const STAGES = [
   { id: 'closed', label: 'Closed', color: 'emerald' },
 ];
 
-export function getLeads() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
-  }
+// Cache for quick isLeadSaved checks (refreshed on fetch)
+let _cachedPlaceIds = new Set();
+
+export async function getLeads(stage) {
+  const params = stage ? `?stage=${stage}` : '';
+  const res = await fetch(`${API_BASE}/leads${params}`);
+  const data = await res.json();
+  const leads = data.leads || [];
+  _cachedPlaceIds = new Set(leads.map(l => l.place_id));
+  return leads;
 }
 
-function saveLeads(leads) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(leads));
-}
+export async function saveLead(business) {
+  if (_cachedPlaceIds.has(business.placeId)) return false;
 
-export function saveLead(business) {
-  const leads = getLeads();
-  if (leads.find(l => l.placeId === business.placeId)) return false; // already saved
-
-  leads.push({
-    placeId: business.placeId,
-    name: business.name,
-    address: business.address,
-    phone: business.phone || '',
-    website: business.website || '',
-    rating: business.rating || 0,
-    reviewCount: business.reviewCount || 0,
-    mapsUrl: business.mapsUrl || '',
-    siteScore: business.audit?.siteScore ?? null,
-    auditStatus: business.audit?.status || 'pending',
-    categories: business.audit?.categories || {},
-    stage: 'saved',
-    notes: '',
-    savedAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
+  const res = await fetch(`${API_BASE}/leads`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      placeId: business.placeId,
+      name: business.name,
+      address: business.address,
+      phone: business.phone || '',
+      website: business.website || '',
+      siteScore: business.audit?.siteScore ?? null,
+      rating: business.rating || 0,
+      reviewCount: business.reviewCount || 0,
+      mapsUrl: business.mapsUrl || '',
+      category: business.searchCategory || '',
+      location: business.searchLocation || '',
+    }),
   });
 
-  saveLeads(leads);
-  return true;
+  if (res.ok) {
+    _cachedPlaceIds.add(business.placeId);
+    return true;
+  }
+  return false;
 }
 
-export function removeLead(placeId) {
-  const leads = getLeads().filter(l => l.placeId !== placeId);
-  saveLeads(leads);
+export async function removeLead(placeId) {
+  await fetch(`${API_BASE}/leads/${encodeURIComponent(placeId)}`, { method: 'DELETE' });
+  _cachedPlaceIds.delete(placeId);
 }
 
-export function updateLeadStage(placeId, stage) {
-  const leads = getLeads().map(l =>
-    l.placeId === placeId ? { ...l, stage, updatedAt: new Date().toISOString() } : l
-  );
-  saveLeads(leads);
+export async function updateLeadStage(placeId, stage) {
+  await fetch(`${API_BASE}/leads/${encodeURIComponent(placeId)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ stage }),
+  });
 }
 
-export function updateLeadNotes(placeId, notes) {
-  const leads = getLeads().map(l =>
-    l.placeId === placeId ? { ...l, notes, updatedAt: new Date().toISOString() } : l
-  );
-  saveLeads(leads);
+export async function updateLeadNotes(placeId, notes) {
+  await fetch(`${API_BASE}/leads/${encodeURIComponent(placeId)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ notes }),
+  });
 }
 
 export function isLeadSaved(placeId) {
-  return getLeads().some(l => l.placeId === placeId);
+  return _cachedPlaceIds.has(placeId);
 }
 
-export function getLeadsByStage(stage) {
-  return getLeads().filter(l => l.stage === stage);
+export async function refreshCache() {
+  await getLeads();
 }
 
-export function getPipelineStats() {
-  const leads = getLeads();
-  return STAGES.map(s => ({
-    ...s,
-    count: leads.filter(l => l.stage === s.id).length,
-  }));
+export async function getPipelineStats() {
+  const res = await fetch(`${API_BASE}/leads/stats`);
+  return res.json();
 }

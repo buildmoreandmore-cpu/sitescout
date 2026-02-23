@@ -239,6 +239,169 @@ app.post('/api/audit', async (req, res) => {
   }
 });
 
+// --- Supabase leads ---
+const SUPABASE_URL = process.env.SUPABASE_URL || 'https://vbwcatbixcgakdwgdavl.supabase.co';
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY || '';
+
+async function supaFetch(path, opts = {}) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1${path}`, {
+    ...opts,
+    headers: {
+      'apikey': SUPABASE_KEY,
+      'Authorization': `Bearer ${SUPABASE_KEY}`,
+      'Content-Type': 'application/json',
+      'Prefer': opts.prefer || 'return=representation',
+      ...opts.headers,
+    },
+  });
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Supabase error: ${err}`);
+  }
+  const text = await res.text();
+  return text ? JSON.parse(text) : null;
+}
+
+// Get all leads (optionally by stage)
+app.get('/api/leads', async (req, res) => {
+  try {
+    const { stage } = req.query;
+    let path = '/sitescout_leads?order=scanned_at.desc';
+    if (stage) path += `&stage=eq.${stage}`;
+    const leads = await supaFetch(path);
+    res.json({ leads });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Save a lead (upsert by place_id)
+app.post('/api/leads', async (req, res) => {
+  try {
+    const lead = req.body;
+    if (!lead.place_id && !lead.placeId) {
+      return res.status(400).json({ error: 'place_id required' });
+    }
+    // Normalize keys to snake_case
+    const row = {
+      place_id: lead.place_id || lead.placeId,
+      name: lead.name,
+      address: lead.address,
+      phone: lead.phone || null,
+      email: lead.email || null,
+      owner_name: lead.owner_name || lead.ownerName || null,
+      website: lead.website || null,
+      site_score: lead.site_score ?? lead.siteScore ?? null,
+      category: lead.category || null,
+      location: lead.location || null,
+      rating: lead.rating || null,
+      review_count: lead.review_count ?? lead.reviewCount ?? null,
+      maps_url: lead.maps_url || lead.mapsUrl || null,
+      facebook: lead.facebook || null,
+      instagram: lead.instagram || null,
+      stage: lead.stage || 'saved',
+      notes: lead.notes || '',
+      scanned_at: lead.scanned_at || lead.scannedAt || new Date().toISOString(),
+    };
+
+    const result = await supaFetch('/sitescout_leads', {
+      method: 'POST',
+      body: JSON.stringify(row),
+      headers: { 'Prefer': 'return=representation,resolution=merge-duplicates' },
+      prefer: 'return=representation,resolution=merge-duplicates',
+    });
+
+    res.json({ lead: result?.[0] || row, created: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Bulk save leads
+app.post('/api/leads/bulk', async (req, res) => {
+  try {
+    const { leads } = req.body;
+    if (!Array.isArray(leads)) return res.status(400).json({ error: 'leads array required' });
+
+    const rows = leads.map(l => ({
+      place_id: l.place_id || l.placeId,
+      name: l.name,
+      address: l.address,
+      phone: l.phone || null,
+      email: l.email || null,
+      owner_name: l.owner_name || l.ownerName || null,
+      website: l.website || null,
+      site_score: l.site_score ?? l.siteScore ?? null,
+      category: l.category || null,
+      location: l.location || null,
+      rating: l.rating || null,
+      review_count: l.review_count ?? l.reviewCount ?? null,
+      maps_url: l.maps_url || l.mapsUrl || null,
+      facebook: l.facebook || null,
+      instagram: l.instagram || null,
+      stage: l.stage || 'saved',
+      notes: l.notes || '',
+      scanned_at: l.scanned_at || l.scannedAt || new Date().toISOString(),
+    }));
+
+    const result = await supaFetch('/sitescout_leads', {
+      method: 'POST',
+      body: JSON.stringify(rows),
+      headers: { 'Prefer': 'return=representation,resolution=merge-duplicates' },
+      prefer: 'return=representation,resolution=merge-duplicates',
+    });
+
+    res.json({ inserted: result?.length || 0 });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Update a lead (stage, notes)
+app.patch('/api/leads/:placeId', async (req, res) => {
+  try {
+    const { placeId } = req.params;
+    const updates = {};
+    if (req.body.stage) updates.stage = req.body.stage;
+    if (req.body.notes !== undefined) updates.notes = req.body.notes;
+    updates.updated_at = new Date().toISOString();
+
+    const result = await supaFetch(`/sitescout_leads?place_id=eq.${encodeURIComponent(placeId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(updates),
+    });
+
+    res.json({ lead: result?.[0] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Delete a lead
+app.delete('/api/leads/:placeId', async (req, res) => {
+  try {
+    const { placeId } = req.params;
+    await supaFetch(`/sitescout_leads?place_id=eq.${encodeURIComponent(placeId)}`, {
+      method: 'DELETE',
+    });
+    res.json({ deleted: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Pipeline stats
+app.get('/api/leads/stats', async (req, res) => {
+  try {
+    const leads = await supaFetch('/sitescout_leads?select=stage');
+    const stats = { saved: 0, reaching_out: 0, responded: 0, closed: 0, total: leads.length };
+    for (const l of leads) stats[l.stage] = (stats[l.stage] || 0) + 1;
+    res.json(stats);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Health check
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok' });

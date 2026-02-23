@@ -1,48 +1,60 @@
 import { useState, useEffect, useCallback } from 'react';
 import { STAGES, getLeads, updateLeadStage, updateLeadNotes, removeLead } from '../utils/pipeline';
-import { getStatusColor } from '../utils/api';
 
 export default function Pipeline() {
   const [leads, setLeads] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [expandedId, setExpandedId] = useState(null);
   const [editingNotes, setEditingNotes] = useState(null);
   const [notesDraft, setNotesDraft] = useState('');
 
-  const refresh = useCallback(() => {
-    setLeads(getLeads());
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    const data = await getLeads();
+    setLeads(data);
+    setLoading(false);
   }, []);
 
-  useEffect(() => {
-    refresh();
-  }, [refresh]);
+  useEffect(() => { refresh(); }, [refresh]);
 
-  const handleStageChange = (placeId, newStage) => {
-    updateLeadStage(placeId, newStage);
+  const handleStageChange = async (placeId, newStage) => {
+    await updateLeadStage(placeId, newStage);
     refresh();
   };
 
-  const handleSaveNotes = (placeId) => {
-    updateLeadNotes(placeId, notesDraft);
+  const handleSaveNotes = async (placeId) => {
+    await updateLeadNotes(placeId, notesDraft);
     setEditingNotes(null);
     refresh();
   };
 
-  const handleRemove = (placeId) => {
-    removeLead(placeId);
+  const handleRemove = async (placeId) => {
+    await removeLead(placeId);
     setExpandedId(null);
     refresh();
   };
 
   const startEditNotes = (lead) => {
-    setEditingNotes(lead.placeId);
+    setEditingNotes(lead.place_id);
     setNotesDraft(lead.notes || '');
   };
 
-  // Stats
   const stats = STAGES.map(s => ({
     ...s,
     count: leads.filter(l => l.stage === s.id).length,
   }));
+
+  if (loading) {
+    return (
+      <div className="text-center py-20">
+        <svg className="animate-spin h-8 w-8 text-brand-400 mx-auto mb-4" viewBox="0 0 24 24">
+          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+        </svg>
+        <p className="text-sm text-gray-400">Loading pipeline...</p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -56,7 +68,6 @@ export default function Pipeline() {
         ))}
       </div>
 
-      {/* Stage columns */}
       {leads.length === 0 ? (
         <div className="text-center py-20">
           <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gray-800/50 mb-6">
@@ -66,7 +77,7 @@ export default function Pipeline() {
           </div>
           <h2 className="text-lg font-semibold text-gray-400 mb-2">No saved leads yet</h2>
           <p className="text-sm text-gray-600 max-w-md mx-auto">
-            Search for businesses, then click the bookmark icon to save leads to your pipeline.
+            Search for businesses, then click the bookmark icon to save leads to your pipeline. The sub-agent also adds leads automatically.
           </p>
         </div>
       ) : (
@@ -85,48 +96,43 @@ export default function Pipeline() {
                 <div className="bg-gray-900/50 border border-gray-800 rounded-xl overflow-hidden">
                   <div className="divide-y divide-gray-800/50">
                     {stageLeads.map(lead => (
-                      <div key={lead.placeId}>
+                      <div key={lead.place_id}>
                         <div
-                          onClick={() => setExpandedId(expandedId === lead.placeId ? null : lead.placeId)}
+                          onClick={() => setExpandedId(expandedId === lead.place_id ? null : lead.place_id)}
                           className="flex items-center gap-4 px-4 py-3 hover:bg-gray-800/50 cursor-pointer transition-colors"
                         >
-                          {/* Score indicator */}
                           <div className="w-1 h-8 rounded-full flex-shrink-0" style={{
-                            backgroundColor: lead.siteScore == null ? '#4B5563' :
-                              lead.siteScore <= 40 ? '#EF4444' :
-                              lead.siteScore <= 70 ? '#EAB308' : '#10B981'
+                            backgroundColor: lead.site_score == null ? '#4B5563' :
+                              lead.site_score <= 40 ? '#EF4444' :
+                              lead.site_score <= 70 ? '#EAB308' : '#10B981'
                           }} />
-
-                          {/* Info */}
                           <div className="flex-1 min-w-0">
                             <p className="text-sm font-medium text-gray-100">{lead.name}</p>
                             <p className="text-xs text-gray-500 truncate">{lead.address}</p>
                           </div>
-
-                          {/* Score */}
                           <div className="flex-shrink-0">
-                            {lead.siteScore != null ? (
+                            {lead.site_score != null ? (
                               <span className={`text-sm font-bold ${
-                                lead.siteScore <= 40 ? 'text-red-400' :
-                                lead.siteScore <= 70 ? 'text-yellow-400' : 'text-emerald-400'
-                              }`}>{lead.siteScore}</span>
-                            ) : lead.website ? (
-                              <span className="text-sm text-gray-500">—</span>
+                                lead.site_score <= 40 ? 'text-red-400' :
+                                lead.site_score <= 70 ? 'text-yellow-400' : 'text-emerald-400'
+                              }`}>{lead.site_score}</span>
                             ) : (
                               <span className="text-xs text-gray-600 italic">No site</span>
                             )}
                           </div>
-
-                          {/* Phone */}
                           <div className="hidden sm:block flex-shrink-0">
-                            {lead.phone ? (
-                              <span className="text-xs text-gray-400">{lead.phone}</span>
-                            ) : (
-                              <span className="text-xs text-gray-600">—</span>
-                            )}
+                            <span className="text-xs text-gray-400">{lead.phone || '—'}</span>
                           </div>
-
-                          {/* Notes indicator */}
+                          {lead.email && (
+                            <div className="hidden md:block flex-shrink-0">
+                              <span className="text-xs text-brand-400">{lead.email}</span>
+                            </div>
+                          )}
+                          {lead.owner_name && (
+                            <div className="hidden lg:block flex-shrink-0">
+                              <span className="text-xs text-gray-300">{lead.owner_name}</span>
+                            </div>
+                          )}
                           {lead.notes && (
                             <div className="flex-shrink-0">
                               <svg className="w-4 h-4 text-brand-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -134,48 +140,37 @@ export default function Pipeline() {
                               </svg>
                             </div>
                           )}
-
-                          {/* Chevron */}
-                          <svg className={`w-4 h-4 text-gray-500 transition-transform ${expandedId === lead.placeId ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <svg className={`w-4 h-4 text-gray-500 transition-transform ${expandedId === lead.place_id ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                           </svg>
                         </div>
 
-                        {/* Expanded detail */}
-                        {expandedId === lead.placeId && (
+                        {expandedId === lead.place_id && (
                           <div className="px-4 pb-4 pt-1 border-t border-gray-800/30 space-y-4">
-                            {/* Contact info */}
                             <div className="flex flex-wrap gap-3 text-sm">
-                              {lead.phone && (
-                                <a href={`tel:${lead.phone}`} className="text-brand-400 hover:text-brand-300">{lead.phone}</a>
-                              )}
-                              {lead.website && (
-                                <a href={lead.website} target="_blank" rel="noopener noreferrer" className="text-brand-400 hover:text-brand-300 truncate max-w-xs">
-                                  {lead.website.replace(/^https?:\/\//, '').replace(/\/$/, '')}
-                                </a>
-                              )}
-                              {lead.mapsUrl && (
-                                <a href={lead.mapsUrl} target="_blank" rel="noopener noreferrer" className="text-gray-400 hover:text-gray-300">Maps</a>
-                              )}
+                              {lead.phone && <a href={`tel:${lead.phone}`} className="text-brand-400 hover:text-brand-300">{lead.phone}</a>}
+                              {lead.email && <a href={`mailto:${lead.email}`} className="text-brand-400 hover:text-brand-300">{lead.email}</a>}
+                              {lead.website && <a href={lead.website} target="_blank" rel="noopener noreferrer" className="text-brand-400 hover:text-brand-300 truncate max-w-xs">{lead.website.replace(/^https?:\/\//, '').replace(/\/$/, '')}</a>}
+                              {lead.maps_url && <a href={lead.maps_url} target="_blank" rel="noopener noreferrer" className="text-gray-400 hover:text-gray-300">Maps</a>}
+                              {lead.facebook && <a href={lead.facebook} target="_blank" rel="noopener noreferrer" className="text-gray-400 hover:text-gray-300">Facebook</a>}
+                              {lead.instagram && <a href={lead.instagram} target="_blank" rel="noopener noreferrer" className="text-gray-400 hover:text-gray-300">Instagram</a>}
                             </div>
 
-                            {/* Rating */}
-                            <div className="flex items-center gap-2 text-sm text-gray-400">
+                            <div className="flex items-center gap-4 text-sm text-gray-400">
+                              {lead.owner_name && <span>👤 {lead.owner_name}</span>}
                               <span className="text-yellow-400">★</span>
-                              <span>{lead.rating || 'N/A'}</span>
-                              <span>({lead.reviewCount || 0} reviews)</span>
-                              <span className="text-gray-600 mx-1">·</span>
-                              <span className="text-gray-500">Saved {new Date(lead.savedAt).toLocaleDateString()}</span>
+                              <span>{lead.rating || 'N/A'} ({lead.review_count || 0} reviews)</span>
+                              {lead.category && <span className="text-gray-500">· {lead.category}</span>}
+                              <span className="text-gray-600">· Saved {new Date(lead.scanned_at).toLocaleDateString()}</span>
                             </div>
 
-                            {/* Stage selector */}
                             <div className="flex items-center gap-2">
                               <span className="text-xs text-gray-400 uppercase tracking-wider">Stage:</span>
                               <div className="flex gap-1.5">
                                 {STAGES.map(s => (
                                   <button
                                     key={s.id}
-                                    onClick={(e) => { e.stopPropagation(); handleStageChange(lead.placeId, s.id); }}
+                                    onClick={(e) => { e.stopPropagation(); handleStageChange(lead.place_id, s.id); }}
                                     className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
                                       lead.stage === s.id
                                         ? 'bg-brand-600 text-white'
@@ -188,9 +183,8 @@ export default function Pipeline() {
                               </div>
                             </div>
 
-                            {/* Notes */}
                             <div>
-                              {editingNotes === lead.placeId ? (
+                              {editingNotes === lead.place_id ? (
                                 <div className="space-y-2">
                                   <textarea
                                     value={notesDraft}
@@ -201,18 +195,8 @@ export default function Pipeline() {
                                     autoFocus
                                   />
                                   <div className="flex gap-2">
-                                    <button
-                                      onClick={() => handleSaveNotes(lead.placeId)}
-                                      className="px-3 py-1.5 bg-brand-600 hover:bg-brand-700 text-white text-xs font-medium rounded-lg transition-colors"
-                                    >
-                                      Save
-                                    </button>
-                                    <button
-                                      onClick={() => setEditingNotes(null)}
-                                      className="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-gray-400 text-xs font-medium rounded-lg transition-colors"
-                                    >
-                                      Cancel
-                                    </button>
+                                    <button onClick={() => handleSaveNotes(lead.place_id)} className="px-3 py-1.5 bg-brand-600 hover:bg-brand-700 text-white text-xs font-medium rounded-lg transition-colors">Save</button>
+                                    <button onClick={() => setEditingNotes(null)} className="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-gray-400 text-xs font-medium rounded-lg transition-colors">Cancel</button>
                                   </div>
                                 </div>
                               ) : (
@@ -225,10 +209,9 @@ export default function Pipeline() {
                               )}
                             </div>
 
-                            {/* Remove */}
                             <div className="flex justify-end">
                               <button
-                                onClick={(e) => { e.stopPropagation(); handleRemove(lead.placeId); }}
+                                onClick={(e) => { e.stopPropagation(); handleRemove(lead.place_id); }}
                                 className="text-xs text-red-400 hover:text-red-300 transition-colors"
                               >
                                 Remove from pipeline

@@ -1,14 +1,21 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import SearchBar from './components/SearchBar';
 import ResultsTable from './components/ResultsTable';
 import ProgressBar from './components/ProgressBar';
 import Pipeline from './components/Pipeline';
 import { useSearch } from './hooks/useSearch';
-import { getPipelineStats } from './utils/pipeline';
+import { refreshCache, getPipelineStats } from './utils/pipeline';
 
 export default function App() {
   const [view, setView] = useState('search'); // 'search' | 'pipeline'
-  const [pipelineKey, setPipelineKey] = useState(0); // force re-render on save
+  const [pipelineKey, setPipelineKey] = useState(0);
+  const [totalSaved, setTotalSaved] = useState(0);
+
+  useEffect(() => {
+    refreshCache().then(() => {
+      getPipelineStats().then(stats => setTotalSaved(stats.total || 0)).catch(() => {});
+    }).catch(() => {});
+  }, [pipelineKey]);
 
   const {
     businesses,
@@ -24,9 +31,6 @@ export default function App() {
   const onLeadSaved = useCallback(() => {
     setPipelineKey(k => k + 1);
   }, []);
-
-  const stats = getPipelineStats();
-  const totalSaved = stats.reduce((sum, s) => sum + s.count, 0);
 
   return (
     <div className="min-h-screen bg-gray-950">
