@@ -32,9 +32,9 @@ const ALL_TARGETS = [
 // Pick 4 targets based on day of year (rotates daily)
 function getTodaysTargets() {
   const day = Math.floor(Date.now() / 86400000);
-  const start = (day * 4) % ALL_TARGETS.length;
+  const start = (day * 2) % ALL_TARGETS.length;
   const targets = [];
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < 2; i++) {
     targets.push(ALL_TARGETS[(start + i) % ALL_TARGETS.length]);
   }
   return targets;
