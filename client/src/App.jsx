@@ -1,9 +1,15 @@
+import { useState, useCallback } from 'react';
 import SearchBar from './components/SearchBar';
 import ResultsTable from './components/ResultsTable';
 import ProgressBar from './components/ProgressBar';
+import Pipeline from './components/Pipeline';
 import { useSearch } from './hooks/useSearch';
+import { getPipelineStats } from './utils/pipeline';
 
 export default function App() {
+  const [view, setView] = useState('search'); // 'search' | 'pipeline'
+  const [pipelineKey, setPipelineKey] = useState(0); // force re-render on save
+
   const {
     businesses,
     loading,
@@ -14,6 +20,13 @@ export default function App() {
     search,
     cancelAudit,
   } = useSearch();
+
+  const onLeadSaved = useCallback(() => {
+    setPipelineKey(k => k + 1);
+  }, []);
+
+  const stats = getPipelineStats();
+  const totalSaved = stats.reduce((sum, s) => sum + s.count, 0);
 
   return (
     <div className="min-h-screen bg-gray-950">
@@ -31,70 +44,99 @@ export default function App() {
               <p className="text-xs text-gray-500">Business Website Auditor</p>
             </div>
           </div>
-          {searchInfo && (
-            <div className="hidden sm:flex items-center gap-2 text-sm text-gray-400">
-              <span className="px-2 py-0.5 bg-gray-800 rounded text-xs">{searchInfo.count} results</span>
-              <span>{searchInfo.category} in {searchInfo.location}</span>
-            </div>
-          )}
+
+          {/* Nav */}
+          <div className="flex items-center gap-1 bg-gray-900/50 border border-gray-800 rounded-lg p-1">
+            <button
+              onClick={() => setView('search')}
+              className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                view === 'search'
+                  ? 'bg-gray-800 text-white'
+                  : 'text-gray-400 hover:text-gray-300'
+              }`}
+            >
+              Search
+            </button>
+            <button
+              onClick={() => setView('pipeline')}
+              className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors flex items-center gap-2 ${
+                view === 'pipeline'
+                  ? 'bg-gray-800 text-white'
+                  : 'text-gray-400 hover:text-gray-300'
+              }`}
+            >
+              Pipeline
+              {totalSaved > 0 && (
+                <span className="px-1.5 py-0.5 bg-brand-600 text-white text-xs rounded-full min-w-[1.25rem] text-center">
+                  {totalSaved}
+                </span>
+              )}
+            </button>
+          </div>
         </div>
       </header>
 
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 py-8 space-y-6">
-        {/* Search */}
-        <section>
-          <SearchBar onSearch={search} loading={loading} />
-        </section>
+        {view === 'search' ? (
+          <>
+            {/* Search */}
+            <section>
+              <SearchBar onSearch={search} loading={loading} />
+            </section>
 
-        {/* Error */}
-        {error && (
-          <div className="bg-red-900/20 border border-red-800/30 rounded-lg px-4 py-3 text-sm text-red-400">
-            <span className="font-medium">Error:</span> {error}
-          </div>
-        )}
+            {/* Error */}
+            {error && (
+              <div className="bg-red-900/20 border border-red-800/30 rounded-lg px-4 py-3 text-sm text-red-400">
+                <span className="font-medium">Error:</span> {error}
+              </div>
+            )}
 
-        {/* Progress */}
-        <ProgressBar progress={progress} auditing={auditing} onCancel={cancelAudit} />
+            {/* Progress */}
+            <ProgressBar progress={progress} auditing={auditing} onCancel={cancelAudit} />
 
-        {/* Results */}
-        <ResultsTable businesses={businesses} />
+            {/* Results */}
+            <ResultsTable businesses={businesses} onLeadSaved={onLeadSaved} />
 
-        {/* Empty State */}
-        {!loading && businesses.length === 0 && !error && (
-          <div className="text-center py-20">
-            <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gray-800/50 mb-6">
-              <svg className="w-8 h-8 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-              </svg>
-            </div>
-            <h2 className="text-lg font-semibold text-gray-400 mb-2">Find businesses to audit</h2>
-            <p className="text-sm text-gray-600 max-w-md mx-auto">
-              Enter a business category and location above to discover businesses with poor or outdated websites — your next web design clients.
-            </p>
-            <div className="flex flex-wrap gap-2 justify-center mt-6">
-              {[
-                { cat: 'Restaurants', loc: 'Atlanta, GA' },
-                { cat: 'Dentists', loc: 'Decatur, GA' },
-                { cat: 'HVAC', loc: 'Sandy Springs, GA' },
-              ].map((example) => (
-                <button
-                  key={example.cat}
-                  onClick={() => search(example.cat, example.loc)}
-                  className="px-3 py-1.5 bg-gray-800/50 hover:bg-gray-800 border border-gray-700/50 rounded-full text-xs text-gray-400 hover:text-gray-300 transition-colors"
-                >
-                  {example.cat} in {example.loc}
-                </button>
-              ))}
-            </div>
-          </div>
+            {/* Empty State */}
+            {!loading && businesses.length === 0 && !error && (
+              <div className="text-center py-20">
+                <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gray-800/50 mb-6">
+                  <svg className="w-8 h-8 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                  </svg>
+                </div>
+                <h2 className="text-lg font-semibold text-gray-400 mb-2">Find businesses to audit</h2>
+                <p className="text-sm text-gray-600 max-w-md mx-auto">
+                  Enter a business category and location above to discover businesses with poor or outdated websites — your next web design clients.
+                </p>
+                <div className="flex flex-wrap gap-2 justify-center mt-6">
+                  {[
+                    { cat: 'Restaurants', loc: 'Atlanta, GA' },
+                    { cat: 'Dentists', loc: 'Decatur, GA' },
+                    { cat: 'HVAC', loc: 'Sandy Springs, GA' },
+                  ].map((example) => (
+                    <button
+                      key={example.cat}
+                      onClick={() => search(example.cat, example.loc)}
+                      className="px-3 py-1.5 bg-gray-800/50 hover:bg-gray-800 border border-gray-700/50 rounded-full text-xs text-gray-400 hover:text-gray-300 transition-colors"
+                    >
+                      {example.cat} in {example.loc}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </>
+        ) : (
+          <Pipeline key={pipelineKey} />
         )}
       </main>
 
       {/* Footer */}
       <footer className="border-t border-gray-800/30 mt-auto">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4 flex items-center justify-between text-xs text-gray-600">
-          <span>SiteScout v1.0</span>
+          <span>SiteScout v1.1</span>
           <span>Built for web design consultants</span>
         </div>
       </footer>

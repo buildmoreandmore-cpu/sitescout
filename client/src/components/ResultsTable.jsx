@@ -3,6 +3,7 @@ import ScoreBadge from './ScoreBadge';
 import DetailPanel from './DetailPanel';
 import Filters from './Filters';
 import { exportToCsv } from '../utils/api';
+import { saveLead, isLeadSaved } from '../utils/pipeline';
 
 const DEFAULT_FILTERS = {
   scoreRange: 'all',
@@ -10,7 +11,7 @@ const DEFAULT_FILTERS = {
   noWebsiteOnly: false,
 };
 
-export default function ResultsTable({ businesses }) {
+export default function ResultsTable({ businesses, onLeadSaved }) {
   const [sortKey, setSortKey] = useState('siteScore');
   const [sortAsc, setSortAsc] = useState(true);
   const [expandedId, setExpandedId] = useState(null);
@@ -114,6 +115,7 @@ export default function ResultsTable({ businesses }) {
                 <SortHeader label="Reviews" sortKey="reviewCount" currentKey={sortKey} asc={sortAsc} onSort={handleSort} align="center" />
                 <SortHeader label="SiteScore" sortKey="siteScore" currentKey={sortKey} asc={sortAsc} onSort={handleSort} align="center" />
                 <th className="px-4 py-3 text-center text-xs font-medium text-gray-400 uppercase tracking-wider">Status</th>
+                <th className="px-4 py-3 text-center text-xs font-medium text-gray-400 uppercase tracking-wider w-12"></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-800/50">
@@ -123,6 +125,7 @@ export default function ResultsTable({ businesses }) {
                   business={business}
                   isExpanded={expandedId === business.placeId}
                   onToggle={() => setExpandedId(expandedId === business.placeId ? null : business.placeId)}
+                  onLeadSaved={onLeadSaved}
                 />
               ))}
             </tbody>
@@ -139,8 +142,17 @@ export default function ResultsTable({ businesses }) {
   );
 }
 
-function TableRow({ business, isExpanded, onToggle }) {
+function TableRow({ business, isExpanded, onToggle, onLeadSaved }) {
   const b = business;
+  const saved = isLeadSaved(b.placeId);
+
+  const handleSave = (e) => {
+    e.stopPropagation();
+    if (!saved) {
+      saveLead(b);
+      if (onLeadSaved) onLeadSaved();
+    }
+  };
 
   return (
     <>
@@ -203,10 +215,25 @@ function TableRow({ business, isExpanded, onToggle }) {
         <td className="px-4 py-3 text-center">
           <ScoreBadge score={b.audit?.siteScore} website={b.website} />
         </td>
+        <td className="px-4 py-3 text-center">
+          <button
+            onClick={handleSave}
+            className={`p-1.5 rounded-lg transition-colors ${
+              saved
+                ? 'text-brand-400 cursor-default'
+                : 'text-gray-600 hover:text-brand-400 hover:bg-gray-800'
+            }`}
+            title={saved ? 'Saved to pipeline' : 'Save to pipeline'}
+          >
+            <svg className="w-4 h-4" fill={saved ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
+            </svg>
+          </button>
+        </td>
       </tr>
       {isExpanded && (
         <tr>
-          <td colSpan={6} className="px-4 py-0">
+          <td colSpan={7} className="px-4 py-0">
             <DetailPanel business={b} onClose={onToggle} />
           </td>
         </tr>
